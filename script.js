@@ -1,202 +1,193 @@
 
-document.addEventListener('DOMContentLoaded', function() {
-    const drawButton = document.getElementById('drawButton');
-    const resetButton = document.getElementById('resetButton');
-    const resultContainer = document.getElementById('result');
-    const numbersDisplay = document.getElementById('numbers');
-    const loadingContainer = document.getElementById('loading');
+// DOM 요소들
+const dateInput = document.getElementById('mealDate');
+const searchBtn = document.getElementById('searchBtn');
+const mealInfo = document.getElementById('mealInfo');
+const loading = document.getElementById('loading');
+const errorMessage = document.getElementById('errorMessage');
 
-    // Welcome message with SweetAlert2
-    Swal.fire({
-        title: '청소당번 뽑기에 오신 걸 환영합니다! 🎉',
-        text: '1번부터 25번까지 중에서 랜덤으로 5명을 선택해드릴게요!',
-        icon: 'info',
-        confirmButtonText: '시작하기',
-        confirmButtonColor: '#8b5cf6',
-        background: '#ffffff',
-        color: '#374151',
-        showClass: {
-            popup: 'animate__animated animate__bounceIn'
-        },
-        hideClass: {
-            popup: 'animate__animated animate__bounceOut'
-        }
-    });
+// 오늘 날짜를 기본값으로 설정
+const today = new Date();
+const todayString = today.getFullYear() + '-' + 
+    String(today.getMonth() + 1).padStart(2, '0') + '-' + 
+    String(today.getDate()).padStart(2, '0');
+dateInput.value = todayString;
 
-    drawButton.addEventListener('click', function() {
-        // Show confirmation dialog
-        Swal.fire({
-            title: '청소당번을 뽑을까요?',
-            text: '랜덤으로 5명이 선택됩니다.',
-            icon: 'question',
-            showCancelButton: true,
-            confirmButtonColor: '#8b5cf6',
-            cancelButtonColor: '#6b7280',
-            confirmButtonText: '네, 뽑아주세요!',
-            cancelButtonText: '취소',
-            reverseButtons: true
-        }).then((result) => {
-            if (result.isConfirmed) {
-                startDrawing();
-            }
-        });
-    });
+// 이벤트 리스너
+searchBtn.addEventListener('click', searchMealInfo);
+dateInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+        searchMealInfo();
+    }
+});
 
-    resetButton.addEventListener('click', function() {
-        resetResults();
-    });
+// 급식정보 조회 함수
+async function searchMealInfo() {
+    const selectedDate = dateInput.value;
+    
+    if (!selectedDate) {
+        alert('날짜를 선택해주세요.');
+        return;
+    }
+    
+    // 날짜 형식 변환 (YYYY-MM-DD -> YYYYMMDD)
+    const formattedDate = selectedDate.replace(/-/g, '');
+    
+    // UI 상태 변경
+    showLoading();
+    hideError();
+    
+    try {
+        const mealData = await fetchMealData(formattedDate);
+        displayMealInfo(mealData, selectedDate);
+    } catch (error) {
+        console.error('Error fetching meal data:', error);
+        showError();
+    } finally {
+        hideLoading();
+    }
+}
 
-    function startDrawing() {
-        // Hide previous results and show loading
-        resultContainer.classList.add('hidden');
-        loadingContainer.classList.remove('hidden');
-        drawButton.disabled = true;
+// API에서 급식 데이터 가져오기
+async function fetchMealData(date) {
+    const ATPT_OFCDC_SC_CODE = 'J10'; // 경기도교육청
+    const SD_SCHUL_CODE = '7530079'; // 산본고등학교
+    
+    const apiUrl = `https://open.neis.go.kr/hub/mealServiceDietInfo?ATPT_OFCDC_SC_CODE=${ATPT_OFCDC_SC_CODE}&SD_SCHUL_CODE=${SD_SCHUL_CODE}&MLSV_YMD=${date}`;
+    
+    // CORS 문제를 해결하기 위해 프록시 서버 사용
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`;
+    
+    const response = await fetch(proxyUrl);
+    
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const xmlText = await response.text();
+    return parseXMLResponse(xmlText);
+}
 
-        // Simulate drawing process with delay
-        setTimeout(() => {
-            const selectedNumbers = drawNumbers();
-            showResults(selectedNumbers);
-            
-            // Hide loading
-            loadingContainer.classList.add('hidden');
-            drawButton.disabled = false;
-            
-            // Show success message
-            Swal.fire({
-                title: '청소당번이 선택되었습니다! 🎯',
-                html: `선택된 번호: <strong>${selectedNumbers.join(', ')}</strong>`,
-                icon: 'success',
-                confirmButtonText: '확인',
-                confirmButtonColor: '#10b981',
-                timer: 3000,
-                timerProgressBar: true,
-                showClass: {
-                    popup: 'animate__animated animate__tada'
-                }
+// XML 응답 파싱
+function parseXMLResponse(xmlText) {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+    
+    // 에러 체크
+    const errorElement = xmlDoc.querySelector('RESULT > CODE');
+    if (errorElement && errorElement.textContent !== 'INFO-000') {
+        throw new Error('No meal data found');
+    }
+    
+    const rows = xmlDoc.querySelectorAll('row');
+    const mealData = [];
+    
+    rows.forEach(row => {
+        const mealType = row.querySelector('MMEAL_SC_NM')?.textContent || '';
+        const dishName = row.querySelector('DDISH_NM')?.textContent || '';
+        const calories = row.querySelector('CAL_INFO')?.textContent || '';
+        const nutritionInfo = row.querySelector('NTR_INFO')?.textContent || '';
+        
+        if (dishName) {
+            mealData.push({
+                mealType: mealType,
+                dishes: dishName.split('<br/>').filter(dish => dish.trim() !== ''),
+                calories: calories,
+                nutrition: nutritionInfo
             });
-        }, 2000);
-    }
-
-    function drawNumbers() {
-        // 1부터 25까지의 숫자 배열 생성
-        const numbers = Array.from({ length: 25 }, (_, i) => i + 1);
-        
-        // Fisher-Yates 알고리즘으로 배열 섞기
-        for (let i = numbers.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
         }
-        
-        // 처음 5개 숫자 선택하고 정렬
-        return numbers.slice(0, 5).sort((a, b) => a - b);
+    });
+    
+    return mealData;
+}
+
+// 급식정보 화면에 표시
+function displayMealInfo(mealData, date) {
+    if (!mealData || mealData.length === 0) {
+        showNoDataMessage(date);
+        return;
     }
-
-    function showResults(numbers) {
-        // 이전 결과 클리어
-        numbersDisplay.innerHTML = '';
-        
-        // 결과 컨테이너 보이기
-        resultContainer.classList.remove('hidden');
-        
-        // 각 숫자를 카드로 표시 (지연시간을 두고)
-        numbers.forEach((number, index) => {
-            setTimeout(() => {
-                const numberCard = document.createElement('div');
-                numberCard.className = 'number-card';
-                numberCard.textContent = number;
-                
-                // Add tooltip
-                numberCard.setAttribute('data-bs-toggle', 'tooltip');
-                numberCard.setAttribute('data-bs-placement', 'top');
-                numberCard.setAttribute('title', `${number}번 선택됨`);
-                
-                numbersDisplay.appendChild(numberCard);
-                
-                // Initialize tooltip
-                new bootstrap.Tooltip(numberCard);
-                
-            }, index * 300);
-        });
-
-        // Change button text
-        drawButton.innerHTML = '<i class="fas fa-dice me-2"></i>다시 뽑기';
-    }
-
-    function resetResults() {
-        Swal.fire({
-            title: '정말 다시 뽑으시겠어요?',
-            text: '현재 결과가 초기화됩니다.',
-            icon: 'warning',
-            showCancelButton: true,
-            confirmButtonColor: '#ef4444',
-            cancelButtonColor: '#6b7280',
-            confirmButtonText: '네, 다시 뽑겠습니다',
-            cancelButtonText: '취소'
-        }).then((result) => {
-            if (result.isConfirmed) {
-                // Hide results with animation
-                resultContainer.style.opacity = '0';
-                setTimeout(() => {
-                    resultContainer.classList.add('hidden');
-                    resultContainer.style.opacity = '1';
-                    numbersDisplay.innerHTML = '';
-                    drawButton.innerHTML = '<i class="fas fa-dice me-2"></i>뽑기';
-                }, 300);
-
-                Swal.fire({
-                    title: '초기화 완료!',
-                    text: '새로운 청소당번을 뽑아보세요.',
-                    icon: 'success',
-                    confirmButtonText: '확인',
-                    confirmButtonColor: '#8b5cf6',
-                    timer: 1500,
-                    showConfirmButton: false
-                });
-            }
-        });
-    }
-
-    // Add confetti effect function (can be called after successful draw)
-    function createConfetti() {
-        const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7'];
-        const confettiCount = 50;
-
-        for (let i = 0; i < confettiCount; i++) {
-            setTimeout(() => {
-                const confetti = document.createElement('div');
-                confetti.style.position = 'fixed';
-                confetti.style.left = Math.random() * 100 + 'vw';
-                confetti.style.top = '-10px';
-                confetti.style.width = '10px';
-                confetti.style.height = '10px';
-                confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
-                confetti.style.borderRadius = '50%';
-                confetti.style.pointerEvents = 'none';
-                confetti.style.zIndex = '9999';
-                confetti.style.animation = 'fall 3s linear forwards';
-
-                document.body.appendChild(confetti);
-
-                setTimeout(() => {
-                    confetti.remove();
-                }, 3000);
-            }, i * 50);
-        }
-    }
-
-    // Add CSS for confetti animation
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes fall {
-            0% {
-                transform: translateY(-100vh) rotate(0deg);
-                opacity: 1;
-            }
-            100% {
-                transform: translateY(100vh) rotate(360deg);
-                opacity: 0;
-            }
-        }
+    
+    const formatDate = new Date(date).toLocaleDateString('ko-KR', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        weekday: 'long'
+    });
+    
+    let html = `
+        <div class="meal-card">
+            <div class="date-info">${formatDate}</div>
     `;
-    document.head.appendChild(style);
+    
+    mealData.forEach(meal => {
+        html += `
+            <div class="meal-section">
+                <h3>${meal.mealType}</h3>
+                <ul class="meal-list">
+        `;
+        
+        meal.dishes.forEach(dish => {
+            // 알레르기 정보 제거 (숫자와 점 제거)
+            const cleanDish = dish.replace(/\d+\./g, '').trim();
+            if (cleanDish) {
+                html += `<li>${cleanDish}</li>`;
+            }
+        });
+        
+        html += `</ul>`;
+        
+        if (meal.calories) {
+            html += `<p style="margin-top: 10px; color: #666; font-size: 0.9rem;">칼로리: ${meal.calories}</p>`;
+        }
+        
+        html += `</div>`;
+    });
+    
+    html += `</div>`;
+    mealInfo.innerHTML = html;
+}
+
+// 데이터가 없을 때 메시지 표시
+function showNoDataMessage(date) {
+    const formatDate = new Date(date).toLocaleDateString('ko-KR', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        weekday: 'long'
+    });
+    
+    mealInfo.innerHTML = `
+        <div class="meal-card">
+            <div class="date-info">${formatDate}</div>
+            <h2>급식정보 없음</h2>
+            <p class="instruction">선택하신 날짜에는 급식정보가 없습니다.<br>주말이나 공휴일, 방학 기간일 수 있습니다.</p>
+        </div>
+    `;
+}
+
+// 로딩 상태 표시/숨김
+function showLoading() {
+    loading.classList.remove('hidden');
+    mealInfo.classList.add('hidden');
+}
+
+function hideLoading() {
+    loading.classList.add('hidden');
+    mealInfo.classList.remove('hidden');
+}
+
+// 에러 메시지 표시/숨김
+function showError() {
+    errorMessage.classList.remove('hidden');
+    mealInfo.classList.add('hidden');
+}
+
+function hideError() {
+    errorMessage.classList.add('hidden');
+}
+
+// 페이지 로드 시 오늘 급식정보 자동 조회
+window.addEventListener('load', function() {
+    searchMealInfo();
 });
